@@ -190,9 +190,10 @@ function updateStickyPositions(table) {
   const ths = table.querySelectorAll('thead th');
   let left = 0;
   for (let i = 0; i < 5 && i < ths.length; i++) {
-    ths[i].style.left = left + 'px';
+    const currentLeft = left;
+    ths[i].style.left = currentLeft + 'px';
     table.querySelectorAll('tbody tr').forEach((tr) => {
-      if (tr.children[i]) tr.children[i].style.left = left + 'px';
+      if (tr.children[i]) tr.children[i].style.left = currentLeft + 'px';
     });
     left += ths[i].offsetWidth;
   }

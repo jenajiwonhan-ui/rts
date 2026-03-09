@@ -53,12 +53,21 @@ function mondayLabel(date) {
 
 function weekToYm(year, week) {
   const monday = isoWeekMonday(year, week);
-  // Use Thursday to determine the month (ISO standard)
-  const thursday = new Date(monday);
-  thursday.setDate(monday.getDate() + 3);
-  const yy = thursday.getFullYear();
-  const mm = pad2(thursday.getMonth() + 1);
-  return `${yy}-${mm}`;
+  // Majority days rule: count which month owns 4+ of the 7 days (Mon~Sun)
+  const count = {};
+  for (let i = 0; i < 7; i++) {
+    const day = new Date(monday);
+    day.setDate(monday.getDate() + i);
+    const key = `${day.getFullYear()}-${pad2(day.getMonth() + 1)}`;
+    count[key] = (count[key] || 0) + 1;
+  }
+  // Pick the month with the most days
+  let best = null;
+  let bestN = 0;
+  Object.entries(count).forEach(([ym, n]) => {
+    if (n > bestN) { best = ym; bestN = n; }
+  });
+  return best;
 }
 
 /* ── orgLinePath parsing ── */
