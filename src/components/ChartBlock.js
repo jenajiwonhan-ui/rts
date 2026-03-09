@@ -306,7 +306,7 @@ function barOptions(yTitle, diffLabel, dsCount, weekCount) {
           ctx.chart.data.datasets.forEach((d) => { t += d.data[ctx.dataIndex]; });
           if (isTop) return t.toFixed(1);
           const yMax = ctx.chart.scales.y.max || t;
-          return yMax > 0 && v / yMax * 100 >= 15 ? v.toFixed(1) : '';
+          return yMax > 0 && v / yMax * 100 >= 10 ? v.toFixed(1) : '';
         },
       },
       tooltip: {

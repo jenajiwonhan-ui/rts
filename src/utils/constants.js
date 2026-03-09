@@ -5,7 +5,7 @@ export const PC = [
   "#d4605b","#7db87a","#f2c14e","#c27a8e","#7ec8c8"
 ];
 
-export const NPC = "#b8bcc5";
-export const OOF = "#888e95";
+export const NPC = "#A6A6A6";
+export const OOF = "#7F7F7F";
 
 export const MM_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];

@@ -1,28 +1,54 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_RTS_API_BASE_URL || '';
+const API_BASE_URL = '';
 const API_ENDPOINT = process.env.REACT_APP_RTS_API_DOWNLOAD_END_POINT || '';
 const API_KEY = process.env.REACT_APP_RTS_API_KEY || '';
 
 /**
- * Fetch all 52 weeks in a single request.
- * GET {BASE_URL}{ENDPOINT}?year=2026&week=1&week=2&...&week=52
+ * Get current ISO week number for a given date.
+ */
+function getCurrentIsoWeek(date = new Date()) {
+  const jan4 = new Date(date.getFullYear(), 0, 4);
+  const dow = jan4.getDay() || 7;
+  const w01Monday = new Date(jan4);
+  w01Monday.setDate(jan4.getDate() - (dow - 1));
+  const diff = Math.floor((date - w01Monday) / (7 * 24 * 60 * 60 * 1000));
+  return Math.max(1, diff + 1);
+}
+
+/**
+ * Fetch weeks 1 through (current week + 1), 10 concurrent requests at a time.
  */
 export async function fetchAllWeeks(year = 2026) {
-  const weeks = Array.from({ length: 52 }, (_, i) => i + 1);
-  const weekParams = weeks.map((w) => `week=${w}`).join('&');
-  const url = `${API_BASE_URL}${API_ENDPOINT}?year=${year}&${weekParams}`;
-  console.log('2020dd2', API_KEY);
-  const res = await axios.get(url, {
-    headers: {
-      ...(API_KEY ? { 'api-token': API_KEY } : {}),
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-  });
+  const maxWeek = Math.min(getCurrentIsoWeek() + 1, 52);
+  const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
+  console.log(`[RTS API] fetching weeks 1-${maxWeek}`);
+  const headers = { ...(API_KEY ? { 'api-token': API_KEY } : {}) };
 
-  const records = res.data?.data || [];
-  return records.map((r) => ({ ...r, year }));
+  const BATCH = 10;
+  let allRecords = [];
+  for (let i = 0; i < weeks.length; i += BATCH) {
+    const batch = weeks.slice(i, i + BATCH);
+    const results = await Promise.all(
+      batch.map((w) =>
+        axios
+          .get(`${API_BASE_URL}${API_ENDPOINT}?year=${year}&week=${w}`, { headers })
+          .then((res) => {
+            const data = res.data?.data || (Array.isArray(res.data) ? res.data : []);
+            return data.map((r) => ({ ...r, year, week: r.week ?? w }));
+          })
+          .catch((err) => {
+            console.warn(`[RTS API] week ${w} failed:`, err.message);
+            return [];
+          })
+      )
+    );
+    allRecords = allRecords.concat(results.flat());
+  }
+
+  console.log('[RTS API] total records:', allRecords.length);
+  if (allRecords.length > 0) console.log('[RTS API] sample record:', JSON.stringify(allRecords[0]).slice(0, 300));
+  return allRecords;
 }
 
 /* ── helpers: ISO week → dates ── */
@@ -72,24 +98,59 @@ function weekToYm(year, week) {
 
 /* ── orgLinePath parsing ── */
 
-function parseOrgPath(orgLinePath, orgName) {
-  if (!orgLinePath) return { b: orgName || 'Unknown', d: '-', t: '-' };
-  const parts = orgLinePath.split('>').map((s) => s.trim());
+const LV1 = [
+  ['East Publishing Services Div.', 'EPS'],
+  ['NA Publishing Services Div.', 'NAPS'],
+  ['West Publishing Services Dept', 'WPS'],
+  ['Publishing Services Management Div.', 'PSM'],
+  ['Global Creative Div.', 'GCD'],
+];
 
-  // Skip common prefix: "KRAFTON HQ" and the second level (e.g. "KRAFTON Publisher")
-  // Adjust skip count based on actual data
-  let skipCount = 0;
-  if (parts[0] === 'KRAFTON HQ') skipCount = 1;
-  if (parts.length > 1 && parts[1].includes('Publisher')) skipCount = 2;
-  if (parts.length > 1 && parts[1].includes('Platform')) skipCount = 2;
+function getLv1(orgPath) {
+  if (!orgPath) return { code: null, name: null };
+  for (const [fullName, code] of LV1) {
+    if (orgPath.includes(fullName)) return { code, name: fullName };
+  }
+  return { code: null, name: null };
+}
 
-  const orgParts = parts.slice(skipCount);
+function classify(levelName) {
+  const name = levelName.trim();
+  if (!name || name === '.') return { tag: null, name };
+  if (name.includes('Dept')) return { tag: 'D', name };
+  if (name.includes('Team')) return { tag: 'T', name };
+  if (name.includes('Part')) return { tag: 'P', name };
+  return { tag: '?', name };
+}
 
-  if (orgParts.length === 0) return { b: orgName || 'Unknown', d: '-', t: '-' };
-  if (orgParts.length === 1) return { b: orgParts[0], d: '-', t: '-' };
-  if (orgParts.length === 2) return { b: orgParts[0], d: orgParts[1], t: '-' };
-  // 3+ parts: first is division, second is dept, last is team
-  return { b: orgParts[0], d: orgParts[1], t: orgParts[orgParts.length - 1] };
+function parseOrgFull(orgPath, lv1Name, lv1Code) {
+  if (!orgPath || !lv1Name) return { dept: '-', team: '-', part: '-' };
+
+  const i = orgPath.indexOf(lv1Name) + lv1Name.length;
+  let tail = orgPath.slice(i).trim();
+  if (tail.startsWith('>')) tail = tail.slice(1).trim();
+
+  const levels = tail.split('>').map((x) => x.trim()).filter((x) => x && x !== '.');
+
+  let dept = '-', team = '-', part = '-';
+  for (const lv of levels) {
+    const c = classify(lv);
+    if (c.tag === 'D') dept = c.name;
+    else if (c.tag === 'T') team = c.name;
+    else if (c.tag === 'P') part = c.name;
+  }
+
+  // WPS special rule: flatten Dept layer
+  if (lv1Code === 'WPS') {
+    if (team !== '-') {
+      dept = '-';
+    } else if (dept !== '-') {
+      team = dept.replace(/ Dept\./g, '').replace(/ Dept/g, '').trim() + ' Team';
+      dept = '-';
+    }
+  }
+
+  return { dept, team, part };
 }
 
 /* ── transform API records → rawdata.json format ── */
@@ -106,41 +167,47 @@ export function transformApiData(records) {
     weekMondays[wc] = mondayLabel(isoWeekMonday(year, w));
   }
 
-  // Group records: key = name + product + ym
+  // Group records: key = name + product + ym + dept + team
   const detailMap = {};
   const productSet = new Set();
   const ymSet = new Set();
-  const orgTree = {};
+  const orgTree = {}; // { lv1Code: { dept: [teams] } }
 
   records.forEach((r) => {
+    // Filter: 주직 only (primaryPos=1), skip 겸직 (primaryPos=0)
+    if (r.primaryPos !== undefined && r.primaryPos !== 1) return;
+
+    // Identify Lv.1
+    const { code: lv1Code, name: lv1Name } = getLv1(r.orgLinePath);
+    if (!lv1Code) return; // Not in target orgs
+
     const ym = weekToYm(r.year, r.week);
     const wc = weekCode(r.year, r.week);
-    const { b, d, t } = parseOrgPath(r.orgLinePath, r.orgName);
+    const { dept, team, part } = parseOrgFull(r.orgLinePath, lv1Name, lv1Code);
     const name = r.displayName || 'Unknown';
     const product = r.productName || 'Non-product';
 
     productSet.add(product);
     ymSet.add(ym);
 
-    // Build org_tree: b → d → [teams]
-    if (!orgTree[b]) orgTree[b] = {};
-    const dKey = d;
-    if (!orgTree[b][dKey]) orgTree[b][dKey] = [];
-    if (t !== '-' && !orgTree[b][dKey].includes(t)) {
-      orgTree[b][dKey].push(t);
+    // Build org_tree (display tree): lv1 → dept → [teams]
+    if (!orgTree[lv1Code]) orgTree[lv1Code] = {};
+    if (!orgTree[lv1Code][dept]) orgTree[lv1Code][dept] = [];
+    if (team !== '-' && !orgTree[lv1Code][dept].includes(team)) {
+      orgTree[lv1Code][dept].push(team);
     }
 
     // Build detail record
-    const detailKey = `${name}|||${product}|||${ym}|||${b}|||${d}|||${t}`;
+    const detailKey = `${name}|||${product}|||${ym}|||${lv1Code}|||${dept}|||${team}`;
     if (!detailMap[detailKey]) {
       detailMap[detailKey] = {
         n: name,
         p: product,
         ym,
-        b,
-        d: d === '-' ? '-' : d,
-        t: t === '-' ? '-' : t,
-        pt: r.orgName || '',
+        b: lv1Code,
+        d: dept,
+        t: team,
+        pt: part,
         wk: {},
         tot: 0,
       };
@@ -160,6 +227,7 @@ export function transformApiData(records) {
   const detail = Object.values(detailMap);
   const ymList = Array.from(ymSet).sort();
   const products = Array.from(productSet).sort();
+  console.log('[RTS transform] ymList:', ymList, 'products:', products.length, 'orgTree keys:', Object.keys(orgTree), 'detail count:', detail.length);
 
   // Build product_colors (assign from palette)
   const PC = [

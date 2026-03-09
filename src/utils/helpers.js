@@ -1,5 +1,10 @@
 import { PC, NPC, OOF } from './constants';
 
+const FIXED_COLORS = {
+  'Non-product': NPC,
+  '휴가(Out of Office)': OOF,
+};
+
 export function ymLabel(ym) {
   const p = ym.split("-");
   return "'" + p[0].slice(2) + "." + p[1];
@@ -38,12 +43,12 @@ export function buildProdColors(detail, productColors) {
   });
   const pcMap = productColors || {};
   const cM = {};
-  entries.forEach((e) => { cM[e[0]] = { bg: pcMap[e[0]] || PC[0] }; });
+  entries.forEach((e) => { cM[e[0]] = { bg: FIXED_COLORS[e[0]] || pcMap[e[0]] || PC[0] }; });
   const topP = entries.map((e) => e[0]);
-  let allP = topP.filter((p) => p !== "Non-product" && p.indexOf("Out of Office") < 0);
-  if (topP.indexOf("Non-product") >= 0) allP.push("Non-product");
-  const oofP = topP.filter((p) => p.indexOf("Out of Office") >= 0);
-  if (oofP.length) allP = allP.concat(oofP);
+  // Stack order (bottom→top): products → Non-product → 휴가/Out of Office
+  const FIXED_ORDER = ['Non-product', '휴가(Out of Office)'];
+  let allP = topP.filter((p) => !FIXED_ORDER.includes(p));
+  FIXED_ORDER.forEach((fn) => { if (topP.includes(fn)) allP.push(fn); });
   return { cM, topP, allP };
 }
 
@@ -112,7 +117,7 @@ export function buildPersonChartData(people, name) {
   const pCol = {};
   ps.forEach((e, i) => {
     pCol[e[0]] = {
-      bg: e[0] === "Non-product" ? NPC : e[0].indexOf("Out of Office") >= 0 ? OOF : PC[i % PC.length]
+      bg: FIXED_COLORS[e[0]] || PC[i % PC.length]
     };
   });
   const allP = ps.map((e) => e[0]);
